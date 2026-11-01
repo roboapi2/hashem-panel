@@ -10,7 +10,7 @@
 # ---- installed names (single source of truth for this script) ----
 HASHEM_BIN="/usr/local/bin/hashem"       # this script, after install
 HASHEM_SCRIPT="/usr/local/bin/hashem.sh" # versioned copy (gre.sh = legacy alias)
-HASHEM_URL_BASE="https://raw.githubusercontent.com/roboapi2/hashem-panel/main"
+HASHEM_URL_BASE="https://raw.githubusercontent.com/roboapi2/hashem-panel/${HASHEM_SOURCE_REF:-main}"
 
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
@@ -6947,14 +6947,25 @@ install_panel() {
     TMP_PANEL="$(mktemp -d)"
     DL_OK=0
     # pick the release of the active update channel (prebuilt, no Go needed)
-    UPD_TAG="${UPD_TAG:-$(update_pick_tag)}"
-    if [[ -z "$UPD_TAG" && "$(update_get_channel)" == "dev" ]]; then
+    local BRANCH_REF="${HASHEM_SOURCE_REF:-}"
+    if [[ -n "$BRANCH_REF" && ! "$BRANCH_REF" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+        echo "Invalid HASHEM_SOURCE_REF" >&2
+        rm -rf "$TMP_PANEL"
+        return 1
+    fi
+    if [[ -n "$BRANCH_REF" ]]; then
+        UPD_TAG=""
+        echo "[*] Community preview: building panel from branch $BRANCH_REF"
+    else
+        UPD_TAG="${UPD_TAG:-$(update_pick_tag)}"
+    fi
+    if [[ -z "$UPD_TAG" && -z "$BRANCH_REF" && "$(update_get_channel)" == "dev" ]]; then
         echo -e "${RED}[!] No dev build found on the dev channel — nothing changed.${NC}"
         rm -rf "$TMP_PANEL"
         return 1
     fi
     LATEST_JSON=""
-    if [[ -z "$UPD_TAG" ]]; then
+    if [[ -z "$UPD_TAG" && -z "$BRANCH_REF" ]]; then
         LATEST_JSON=$(curl -fsSL --connect-timeout 4 --max-time 10 "https://api.github.com/repos/roboapi2/hashem-panel/releases/latest" 2>/dev/null) || true
         if [[ -z "$LATEST_JSON" ]]; then
             LATEST_JSON=$(curl -fsSL --connect-timeout 4 --max-time 10 "https://mirror.ghproxy.com/https://api.github.com/repos/roboapi2/hashem-panel/releases/latest" 2>/dev/null) || true
@@ -6987,8 +6998,8 @@ install_panel() {
     # Without a manifest nothing is installed, unless the admin opts out with
     # GRE_PANEL_ALLOW_UNVERIFIED_UPDATE=1 (same switch as the panel's updater).
     local MANIFEST="" ALLOW_UNVERIFIED="${GRE_PANEL_ALLOW_UNVERIFIED_UPDATE:-0}" VRC
-    MANIFEST=$(release_manifest_fetch "$UPD_TAG") || MANIFEST=""
-    if [[ -z "$MANIFEST" && "$ALLOW_UNVERIFIED" != "1" ]]; then
+    if [[ -z "$BRANCH_REF" ]]; then MANIFEST=$(release_manifest_fetch "$UPD_TAG") || MANIFEST=""; fi
+    if [[ -z "$BRANCH_REF" && -z "$MANIFEST" && "$ALLOW_UNVERIFIED" != "1" ]]; then
         echo -e "${RED}[!] Cannot fetch the release checksums from github.com — refusing to install unverified files.${NC}"
         echo -e "${YELLOW}    Retry when GitHub is reachable, or set GRE_PANEL_ALLOW_UNVERIFIED_UPDATE=1 to accept the risk.${NC}"
         rm -rf "$TMP_PANEL"
@@ -7008,7 +7019,7 @@ install_panel() {
 
     echo -e "${CYAN}[*] Downloading panel binary (may take a while on slow links)...${NC}"
     rm -f "$TMP_PANEL/gre-panel"
-    if download_with_fallback "$TMP_PANEL/gre-panel" "$DL_URL" 240 && [[ -s "$TMP_PANEL/gre-panel" ]]; then
+    if [[ -z "$BRANCH_REF" ]] && download_with_fallback "$TMP_PANEL/gre-panel" "$DL_URL" 240 && [[ -s "$TMP_PANEL/gre-panel" ]]; then
         if ! verify_asset "$TMP_PANEL/gre-panel" "$PANEL_ASSET"; then
             rm -rf "$TMP_PANEL"
             return 1
@@ -7022,12 +7033,12 @@ install_panel() {
         fi
     fi
 
-    if download_with_fallback "$TMP_PANEL/grepanel" "$GREPANEL_URL" 30 && verify_asset "$TMP_PANEL/grepanel" "grepanel"; then
+    if [[ -z "$BRANCH_REF" ]] && download_with_fallback "$TMP_PANEL/grepanel" "$GREPANEL_URL" 30 && verify_asset "$TMP_PANEL/grepanel" "grepanel"; then
         install -m 0755 "$TMP_PANEL/grepanel" /usr/local/bin/grepanel 2>/dev/null || true
     fi
 
     local NEW_SCRIPT=0
-    if download_with_fallback "$TMP_PANEL/hashem.sh" "$HASHEMSH_URL" 30 && verify_asset "$TMP_PANEL/hashem.sh" "hashem.sh" \
+    if [[ -z "$BRANCH_REF" ]] && download_with_fallback "$TMP_PANEL/hashem.sh" "$HASHEMSH_URL" 30 && verify_asset "$TMP_PANEL/hashem.sh" "hashem.sh" \
             && bash -n "$TMP_PANEL/hashem.sh" 2>/dev/null; then
         install -m 0755 "$TMP_PANEL/hashem.sh" "$HASHEM_SCRIPT" 2>/dev/null && NEW_SCRIPT=1
         cp "$HASHEM_SCRIPT" "$HASHEM_BIN" 2>/dev/null && chmod +x "$HASHEM_BIN" || true
@@ -7054,7 +7065,7 @@ install_panel() {
             apt-get install -y -qq golang-go || true
         fi
         # The source archive has no checksum: fetch it from GitHub only.
-        if ! curl -fsSL --connect-timeout 8 --max-time 120 -o "$TMP_PANEL/panel.tgz" "https://github.com/roboapi2/hashem-panel/archive/refs/heads/main.tar.gz"; then
+        if ! curl -fsSL --connect-timeout 8 --max-time 120 -o "$TMP_PANEL/panel.tgz" "https://github.com/roboapi2/hashem-panel/archive/refs/heads/${BRANCH_REF:-main}.tar.gz"; then
             echo -e "${RED}[!] Failed to download panel sources.${NC}"
             [[ -n "$TMP_SWAP" && -f "$TMP_SWAP" ]] && { swapoff "$TMP_SWAP" 2>/dev/null || true; rm -f "$TMP_SWAP" 2>/dev/null || true; }
             rm -rf "$TMP_PANEL"
